@@ -146,7 +146,6 @@
 
 
 
-
 import json
 import os
 from dotenv import load_dotenv
@@ -184,8 +183,6 @@ st.set_page_config(page_title="DARVIN Voice Chatbot", layout="wide")
 
 if "chat_history" not in st.session_state:
     st.session_state.chat_history = []
-if "message_input" not in st.session_state:
-    st.session_state.message_input = ""
 if "last_spoken_response" not in st.session_state:
     st.session_state.last_spoken_response = ""
 if "chat_session" not in st.session_state:
@@ -240,6 +237,168 @@ def build_voice_controls() -> str:
     </style>
     <div class="voice-toolbar">
       <button id="voice-mic-btn" class="voice-button" type="button">🎙 Start voice input</button>
+      <span id="voice-status" class="voice-status">Click the microphone and start speaking.</span>
+    </div>
+    <script>
+      const doc = window.parent.document;
+      const statusEl = document.getElementById("voice-status");
+      const micBtn = document.getElementById("voice-mic-btn");
+      const SpeechRecognition = window.parent.SpeechRecognition || window.parent.webkitSpeechRecognition;
+      let recognition = null;
+      let listening = false;
+
+      function updateStatus(message) {
+        statusEl.textContent = message;
+      }
+
+      function updateInputValue(text) {
+        const input = doc.querySelector('input[aria-label="Message input"]');
+        if (!input) {
+          updateStatus("Could not find the chat input field.");
+          return false;
+        }
+
+        const valueSetter = Object.getOwnPropertyDescriptor(window.parent.HTMLInputElement.prototype, 'value').set;
+        valueSetter.call(input, text);
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+        input.dispatchEvent(new Event('change', { bubbles: true }));
+        input.focus();
+        return true;
+      }
+
+      function clickSendButton() {
+        const buttons = [...doc.querySelectorAll('button')];
+        const sendButton = buttons.find((button) => button.innerText.trim() === 'Send');
+        if (!sendButton) {
+          updateStatus("Transcript ready, but the Send button was not found.");
+          return;
+        }
+        setTimeout(() => sendButton.click(), 300);
+      }
+
+      if (!SpeechRecognition) {
+        micBtn.disabled = true;
+        micBtn.style.opacity = '0.55';
+        updateStatus('Speech Recognition API is not supported in this browser.');
+      } else {
+        recognition = new SpeechRecognition();
+        recognition.lang = 'en-US';
+        recognition.interimResults = false;
+        recognition.maxAlternatives = 1;
+
+        recognition.onstart = () => {
+          listening = true;
+          micBtn.classList.add('listening');
+          micBtn.textContent = '⏹ Stop recording';
+          updateStatus('Listening… speak now.');
+        };
+
+        recognition.onresult = (event) => {
+          const transcript = event.results?.[0]?.[0]?.transcript?.trim() || '';
+          if (!transcript) {
+            updateStatus('No speech was recognized. Please try again.');
+            return;
+          }
+
+          const updated = updateInputValue(transcript);
+          if (updated) {
+            updateStatus(`Recognized: ${transcript}`);
+            clickSendButton();
+          }
+        };
+
+        recognition.onerror = (event) => {
+          updateStatus(`Voice input error: ${event.error}`);
+        };
+
+        recognition.onend = () => {
+          listening = false;
+          micBtn.classList.remove('listening');
+          micBtn.textContent = '🎙 Start voice input';
+        };
+
+        micBtn.addEventListener('click', () => {
+          if (listening) {
+            recognition.stop();
+            return;
+          }
+          recognition.start();
+        });
+      }
+    </script>
+    """
+
+
+def autoplay_response(text: str) -> None:
+    safe_text = json.dumps(text)
+    components.html(
+        f"""
+        <script>
+          const responseText = {safe_text}.trim();
+          const synth = window.parent.speechSynthesis;
+          if (responseText && synth) {{
+            synth.cancel();
+            const utterance = new SpeechSynthesisUtterance(responseText);
+            utterance.lang = 'en-US';
+            utterance.rate = 1;
+            utterance.pitch = 1;
+            synth.speak(utterance);
+          }}
+        </script>
+        """,
+        height=0,
+    )
+
+
+# =============================
+# UI
+# =============================
+st.title("🤖 DARVIN — Text & Voice AI Assistant")
+st.caption(
+    "Use the microphone button to dictate a message. The browser converts speech to text, sends it to the chatbot, and reads the reply aloud automatically."
+)
+
+st.subheader("🎙 Voice Input")
+components.html(build_voice_controls(), height=90)
+
+st.subheader("💬 Ask DARVIN")
+with st.form("chat_form", clear_on_submit=True):
+    session_input = st.text_input(
+        "Message input",
+        key="message_input",
+        placeholder="Type a message or use the microphone…",
+    )
+    send_clicked = st.form_submit_button("Send", type="primary")
+
+if send_clicked:
+    user_message = session_input.strip()
+    if not user_message:
+        st.warning("Please type a message or use the microphone button.")
+    else:
+        st.session_state.chat_history.append(("You", user_message))
+
+        with st.spinner("DARVIN is thinking..."):
+            bot_response = get_gemini_response(user_message)
+
+        st.session_state.chat_history.append(("DARVIN", bot_response))
+        st.session_state.last_spoken_response = bot_response
+        st.rerun()
+
+if st.session_state.last_spoken_response:
+    autoplay_response(st.session_state.last_spoken_response)
+    st.session_state.last_spoken_response = ""
+
+st.subheader("🗨 Conversation")
+st.markdown("---")
+
+if not st.session_state.chat_history:
+    st.info("No messages yet. Start with the microphone button or type a message.")
+else:
+    for role, message in st.session_state.chat_history:
+        if role == "You":
+            st.markdown(f"👤 **You:** {message}")
+        else:
+            st.markdown(f"🤖 **DARVIN:** {message}")
       <span id="voice-status" class="voice-status">Click the microphone and start speaking.</span>
     </div>
     <script>
